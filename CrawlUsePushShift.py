@@ -1,33 +1,32 @@
-from urllib2 import Request, urlopen, URLError
+#-*-coding:utf-8-*-
+
 import json
 import pandas as pd
 import requests
 import time
-import datetime
 import pymysql
 
-mysql_conn = pymysql.connect(host="*",
-                               user="*",
-                               password="*",
-                               db="*",
+mysql_conn = pymysql.connect(host="",
+                               user="",
+                               password="",
+                               db="mydb",
                                port=3306,
                                use_unicode=True,
                                charset="utf8")
 
+#get the control of DB
 cursor = mysql_conn.cursor()
-
 
 data = {}
 
-# get submission data and use its id to get all comment
-submission = 'https://api.pushshift.io/reddit/search/submission/?subreddit=Bitcoin&after=1d&size=500'
+#透過pushshift API,獲取subreddit=tech,technology,Futurology,hardware,Programming一天內的資料(最大筆數上限500)
+submission = 'https://api.pushshift.io/reddit/search/submission/?subreddit=tech,technology,Futurology,hardware,Programming&after=1d&size=500'
 r = requests.get(submission)
 json_data = r.json()
 SubDF = pd.DataFrame(json_data['data'])
-# print SubDF['selftext']
 
-filename = 'Bitcoin' + 'PS_file.json'
-with open( filename, 'w') as f:
+filename = 'tech' + 'PS_file.json'
+with open( filename, 'a') as f:
 
   for index in range( len(SubDF) )  :
     timeArray = time.localtime(SubDF['created_utc'][index])
@@ -41,13 +40,21 @@ with open( filename, 'w') as f:
     data['ReplyToWho'] = ''
     data['text'] = SubDF['selftext'][index]
 
-    # put in to data base
-    sqldata = "INSERT INTO reddit_data (title, author, created_at, text, type, ReplyToWho )  VALUES (%s,%s,%s,%s,%s,%s)"
-    cursor.execute(sqldata, (
-        SubDF['title'][index], str(SubDF['author'][index]), str(readabletime), SubDF['selftext'][index], "Post", '' ))
+    #查詢資料庫內是否有這筆資料，以標題作者與時間判定
+    sqldata = "SELECT * FROM reddit_data WHERE ( title = '%s' AND author = '%s' AND created_at = '%s' )" %(SubDF['title'][index], str(SubDF['author'][index]), str(readabletime) )
 
-    json.dump(data, f)
-    f.write('\n')
+    cursor.execute(sqldata)
+    result = cursor.fetchone()
+
+    #如果找不到半筆相同，放入資料庫
+    if( type(result) == "NoneType" ) :
+        # put in to data base
+        sqldata = "INSERT INTO reddit_data (title, author, created_at, text, type, ReplyToWho )  VALUES (%s,%s,%s,%s,%s,%s)"
+        cursor.execute(sqldata, (
+            SubDF['title'][index], str(SubDF['author'][index]), str(readabletime), SubDF['selftext'][index], "Post", '' ))
+
+        json.dump(data, f)
+        f.write('\n')
 
     # get the one submission all comment by id
     comments = 'https://api.pushshift.io/reddit/submission/comment_ids/' + SubDF['id'][index]
@@ -58,7 +65,6 @@ with open( filename, 'w') as f:
     if not ComsDF.empty:
         for indexC in range(len(ComsDF[0])):
             comment = 'https://api.pushshift.io/reddit/search/comment/?ids=' + ComsDF[0][indexC]
-            # print( comment )
             r = requests.get(comment)
             json_data = r.json()
             ComDF = pd.DataFrame(json_data['data'])
@@ -74,12 +80,10 @@ with open( filename, 'w') as f:
             commentdata['type'] = "Reply"
             # get the parent_id
             parent_id = ComDF['parent_id'][0]
-            # parent_id = parent_id[0]
             parent_id = parent_id[3:]
             # -----------------
             # get parent real name
             parent = 'https://api.pushshift.io/reddit/search/submission/?size=1&ids=' + parent_id
-            # print( parent )
             r = requests.get(parent)
             json_data = r.json()
             ParDF = pd.DataFrame(json_data['data'])
@@ -89,13 +93,21 @@ with open( filename, 'w') as f:
             commentdata['ReplyToWho'] = str( parent_name )
             commentdata['text'] = ComDF['body'][0]
 
-            # put in to data base
-            sqldata = "INSERT INTO reddit_data (title, author, created_at, text, type, ReplyToWho )  VALUES (%s,%s,%s,%s,%s,%s)"
-            cursor.execute(sqldata, (
-                SubDF['title'][index], str(ComDF['author'][0]), str(readabletime), ComDF['body'][0], "Reply", str( parent_name ) ))
+            # 查詢資料庫內是否有這筆資料，以標題作者與時間判定
+            sqldata = "SELECT * FROM reddit_data WHERE ( title = '%s' AND author = '%s' AND created_at = '%s' ) " % (SubDF['title'][index], str(ComDF['author'][0]), str(readabletime))
 
-            json.dump(commentdata, f)
-            f.write('\n')
+            cursor.execute(sqldata)
+            result = cursor.fetchone()
+
+            # 如果找不到半筆相同，放入資料庫
+            if (type(result) == "NoneType"):
+                # put in to data base
+                sqldata = "INSERT INTO reddit_data (title, author, created_at, text, type, ReplyToWho )  VALUES (%s,%s,%s,%s,%s,%s)"
+                cursor.execute(sqldata, (
+                    SubDF['title'][index], str(ComDF['author'][0]), str(readabletime), ComDF['body'][0], "Reply", str( parent_name ) ))
+
+                json.dump(commentdata, f)
+                f.write('\n')
 
 f.close()
 mysql_conn.commit()
